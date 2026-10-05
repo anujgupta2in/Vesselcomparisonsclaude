@@ -23,7 +23,8 @@ The sidebar lists every page with its number of discrepancies. Start on **Summar
 | Frequency | Jobs with different frequency + recurring patterns (e.g. 18000 h → 36000 h) |
 | Performing rank | Rank differences (order-insensitive) |
 | Description | Similarity bands; select a row for a side-by-side highlighted comparison |
-| Critical & other fields | Critical, Verifying Rank, Title, Job Source, E-Form differences |
+| Critical jobs | Critical counts per vessel; % critical per machinery / sub-component / job title, flagging machinery where ≥50 % of jobs are critical (likely flagged at equipment level); job-level flag differences |
+| Other fields | Verifying Rank, Title, Job Source, E-Form differences |
 | Maker/Model & naming | Maker/Model differences; sub-component names with a duplicated machinery prefix |
 | Machinery drill-down | Every discrepancy for one machinery |
 | Export report | Choose sheets and download the Excel report |

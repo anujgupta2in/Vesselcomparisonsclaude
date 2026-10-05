@@ -201,6 +201,51 @@ def compare(df_a, df_b, name_a=None, name_b=None):
     hot = hot.sort_values("Total discrepancies", ascending=False).reset_index()
     hot.insert(1, "Function", hot["Machinery Location"].map(fmap))
 
+    # ---- Critical job review ----
+    # Criticality should be set per job; a machinery / sub-component where (nearly) every job
+    # is critical usually means the flag was applied at equipment level by mistake.
+    def crit_stats(df, cols):
+        g = df.assign(_c=df["Critical"].str.upper().eq("C")).groupby(cols)["_c"].agg(["size", "sum"])
+        return g.rename(columns={"size": "Jobs", "sum": "Critical"})
+
+    def crit_review(cols, min_jobs):
+        ga, gb = crit_stats(a, cols), crit_stats(b, cols)
+        r = ga.add_suffix(f" - A").join(gb.add_suffix(f" - B"), how="outer").fillna(0).astype(int)
+        r["% Critical - A"] = (100 * r["Critical - A"] / r["Jobs - A"].where(r["Jobs - A"] > 0)).round(0).fillna(0)
+        r["% Critical - B"] = (100 * r["Critical - B"] / r["Jobs - B"].where(r["Jobs - B"] > 0)).round(0).fillna(0)
+        r = r[(r["Critical - A"] > 0) | (r["Critical - B"] > 0)].reset_index()
+
+        def flag(x):
+            notes = []
+            for t in ("A", "B"):
+                if x[f"Jobs - {t}"] >= min_jobs and x[f"% Critical - {t}"] >= 50:
+                    notes.append(f"{t}: {x[f'% Critical - {t}']:.0f}% of jobs critical – check if flag applied at equipment level")
+            if x["Critical - A"] != x["Critical - B"]:
+                notes.append(f"Critical count differs ({x['Critical - A']} vs {x['Critical - B']})")
+            return "; ".join(notes) or "OK"
+        r["Review note"] = r.apply(flag, axis=1)
+        r["_o"] = r["Review note"].str.contains("% of jobs critical")
+        r["_s"] = r["Review note"].ne("OK")
+        r["_d"] = (r["Critical - A"] - r["Critical - B"]).abs()
+        return (r.sort_values(["_o", "_s", "_d"], ascending=False)
+                .drop(columns=["_o", "_s", "_d"]).reset_index(drop=True))
+
+    crit_mach = crit_review(["Machinery Location"], 5)
+    crit_mach.insert(1, "Function", crit_mach["Machinery Location"].map(
+        pd.concat([a, b]).drop_duplicates("Machinery Location").set_index("Machinery Location")["Function"]))
+    crit_sub = crit_review(["Machinery Location", "Sub Component Location"], 3)
+
+    ca, cb = crit_stats(a, ["Title"]), crit_stats(b, ["Title"])
+    crit_title = ca.add_suffix(" - A").join(cb.add_suffix(" - B"), how="outer").fillna(0).astype(int).reset_index()
+    crit_title = crit_title[(crit_title["Critical - A"] > 0) | (crit_title["Critical - B"] > 0)]
+    crit_title["Difference (B-A)"] = crit_title["Critical - B"] - crit_title["Critical - A"]
+    crit_title = crit_title.sort_values("Difference (B-A)", key=abs, ascending=False).reset_index(drop=True)
+
+    ca_jobs = a[a["Critical"].str.upper().eq("C")][["Function"] + KEY + ["Title", "Frequency"]].assign(Vessel=NA)
+    cb_jobs = b[b["Critical"].str.upper().eq("C")][["Function"] + KEY + ["Title", "Frequency"]].assign(Vessel=NB)
+    crit_jobs = pd.concat([ca_jobs, cb_jobs], ignore_index=True)
+    crit_jobs = crit_jobs[["Vessel"] + [c for c in crit_jobs.columns if c != "Vessel"]]
+
     naming = pd.concat([
         a[a["Prefixed Sub Component"]].assign(Vessel=NA),
         b[b["Prefixed Sub Component"]].assign(Vessel=NB),
@@ -241,6 +286,10 @@ def compare(df_a, df_b, name_a=None, name_b=None):
         ("Job details", "Frequency differs", len(freq_diff), "Frequency Diff"),
         ("Job details", "Performing Rank differs (order ignored)", len(rank_diff), "PerfRank Diff"),
         ("Job details", "Description differs", len(desc_diff), "Description Diff"),
+        ("Critical", f"Critical jobs on {NA}", int(a["Critical"].str.upper().eq("C").sum()), "Critical Jobs"),
+        ("Critical", f"Critical jobs on {NB}", int(b["Critical"].str.upper().eq("C").sum()), "Critical Jobs"),
+        ("Critical", "Machinery with ≥50% of jobs critical (possible over-flagging)",
+         int(crit_mach["Review note"].str.contains("% of jobs critical").sum()), "Critical by Machinery"),
         ("Job details", "Title differs", int((other["Field"] == "Title").sum()), "Other Field Diff"),
         ("Job details", "Verifying Rank differs", int((other["Field"] == "Verifying Rank").sum()), "Other Field Diff"),
         ("Job details", "Critical flag differs", int((other["Field"] == "Critical").sum()), "Other Field Diff"),
@@ -268,12 +317,17 @@ def compare(df_a, df_b, name_a=None, name_b=None):
         "Other Field Diff": other,
         "Maker Model Diff": mm_diff,
         "Hotspots": hot,
+        "Critical by Machinery": crit_mach,
+        "Critical by SubComp": crit_sub,
+        "Critical by Title": crit_title,
+        "Critical Jobs": crit_jobs,
     }
 
 
 SHEET_ORDER = ["Naming Issue", "Function Count", "Machinery Count", "SubComponent Count", "Jobs Only A", "Jobs Only B",
                "JobCode Missing", "Frequency Diff", "Freq Patterns", "PerfRank Diff", "Rank Patterns",
-               "Description Diff", "Other Field Diff", "Maker Model Diff", "Hotspots"]
+               "Description Diff", "Other Field Diff", "Critical by Machinery", "Critical by SubComp",
+               "Critical by Title", "Critical Jobs", "Maker Model Diff", "Hotspots"]
 
 
 def build_excel(result, sheets=None, only_mismatch_counts=True):

@@ -117,7 +117,8 @@ PAGES = {
     "frequency": ("⏱ Frequency", len(R["Frequency Diff"])),
     "rank": ("👷 Performing rank", len(R["PerfRank Diff"])),
     "description": ("📝 Description", len(R["Description Diff"])),
-    "other": ("🏷 Critical & other fields", len(R["Other Field Diff"])),
+    "critical": ("🚩 Critical jobs", int(other_counts.get("Critical", 0))),
+    "other": ("🏷 Other fields", int(len(R["Other Field Diff"]) - other_counts.get("Critical", 0))),
     "equipment": ("⚙ Maker/Model & naming", len(R["Maker Model Diff"]) + len(R["Naming Issue"])),
     "drill": ("🔍 Machinery drill-down", None),
     "export": ("⬇ Export report", None),
@@ -244,7 +245,9 @@ if page == "summary":
         ("📝", "Different description", len(R["Description Diff"]),
          "Job instructions worded differently – see side-by-side view.", "description", {}),
         ("🚩", "Different Critical flag", int(other_counts.get("Critical", 0)),
-         "Job marked critical on one vessel only.", "other", {"other_field": "Critical"}),
+         f"Critical jobs: A {int(fd[f'Critical jobs on {NA}'])} vs B {int(fd[f'Critical jobs on {NB}'])}. "
+         f"{int(fd['Machinery with ≥50% of jobs critical (possible over-flagging)'])} machinery look over-flagged.",
+         "critical", {}),
         ("⚙", "Different Maker / Model", len(R["Maker Model Diff"]),
          "Machinery recorded with different maker or model.", "equipment", {}),
         ("🧹", "Sub-component naming issue", len(R["Naming Issue"]),
@@ -421,17 +424,79 @@ elif page == "description":
                            file_name="Description_Diff.csv", mime="text/csv")
 
 # ====================================================================
+# Critical jobs
+# ====================================================================
+elif page == "critical":
+    header("🚩 Critical jobs", "Criticality should be set <b>per job</b> – only jobs whose failure affects safety, "
+           "environment or ship operation. When most jobs on a machinery (including routine jobs such as oil renewal or "
+           "motor maintenance) are critical, the flag was probably applied at equipment level and should be reviewed.")
+    na_c, nb_c = int(fd[f"Critical jobs on {NA}"]), int(fd[f"Critical jobs on {NB}"])
+    tot_a, tot_b = len(raw_a), len(raw_b)
+    k = st.columns(4)
+    k[0].metric("Critical jobs on A", f"{na_c:,}", help=f"{100 * na_c / tot_a:.1f}% of {tot_a:,} jobs")
+    k[1].metric("Critical jobs on B", f"{nb_c:,}", delta=nb_c - na_c or None, delta_color="off",
+                help=f"{100 * nb_c / tot_b:.1f}% of {tot_b:,} jobs")
+    k[2].metric("Matched jobs with different flag", int(other_counts.get("Critical", 0)))
+    k[3].metric("Machinery possibly over-flagged",
+                int(fd["Machinery with ≥50% of jobs critical (possible over-flagging)"]),
+                help="Machinery with at least 5 jobs where 50% or more of the jobs are critical")
+    st.caption(f"Critical share of all jobs: A {100 * na_c / tot_a:.1f}%  ·  B {100 * nb_c / tot_b:.1f}%")
+
+    view = st.segmented_control("View", ["mach", "title", "sub", "diff", "list"], default="mach", key="crit_view",
+                                format_func=lambda v: {"mach": "By machinery", "title": "By job title",
+                                                       "sub": "By sub-component", "diff": "Flag differs (job level)",
+                                                       "list": "All critical jobs"}[v]) or "mach"
+    if view == "mach":
+        df = F(R["Critical by Machinery"])
+        only_flag = st.toggle("Show only machinery that need review", value=True)
+        if only_flag and df is not None and len(df):
+            df = df[df["Review note"] != "OK"]
+        if df is not None and len(df):
+            top = df.head(15)
+            long = top.melt(id_vars="Machinery Location", value_vars=["% Critical - A", "% Critical - B"],
+                            var_name="Vessel", value_name="% of jobs critical")
+            long["Vessel"] = long["Vessel"].str[-1].map({"A": f"A – {NA}", "B": f"B – {NB}"})
+            fig = px.bar(long, y="Machinery Location", x="% of jobs critical", color="Vessel", barmode="group",
+                         orientation="h", height=480, color_discrete_sequence=[COLOR_A, COLOR_B],
+                         category_orders={"Machinery Location": top["Machinery Location"].tolist()})
+            fig.add_vline(x=50, line_dash="dash", line_color="red", annotation_text="50 %")
+            fig.update_layout(yaxis_title=None, legend=dict(orientation="h", y=-0.15, title=None),
+                              margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+        table(df, "Critical_by_Machinery")
+    elif view == "title":
+        st.markdown("<div class='hint'>Generic jobs (e.g. <i>Motor & Starter – Minor Maintenance</i>) flagged critical "
+                    "on one vessel only are a strong sign of over-flagging.</div>", unsafe_allow_html=True)
+        table(F(R["Critical by Title"]), "Critical_by_Title")
+    elif view == "sub":
+        table(F(R["Critical by SubComp"]), "Critical_by_SubComponent")
+    elif view == "diff":
+        d = F(R["Other Field Diff"])
+        d = d[d["Field"] == "Critical"].drop(columns="Field") if d is not None and len(d) else d
+        if d is not None and len(d):
+            d = d.replace({f"Value{sa}": {"": "–"}, f"Value{sb}": {"": "–"}}).rename(
+                columns={f"Value{sa}": f"Critical on A", f"Value{sb}": f"Critical on B"})
+        table(d, "Critical_flag_diff")
+    else:
+        df = F(R["Critical Jobs"])
+        vs = st.segmented_control("Vessel", [NA, NB], selection_mode="multi", default=[NA, NB], key="crit_vs")
+        if df is not None and len(df):
+            df = df[df["Vessel"].isin(vs or [])]
+        table(df, "Critical_jobs")
+
+# ====================================================================
 # Other fields
 # ====================================================================
 elif page == "other":
-    header("🏷 Critical flag & other fields", "Differences in Critical flag, Verifying Rank, Title, Job Source and E-Form "
+    header("🏷 Other fields", "Differences in Verifying Rank, Title, Job Source and E-Form "
            "for jobs that exist on both vessels.")
     df = F(R["Other Field Diff"])
-    fields = ["Critical", "Verifying Rank", "Title", "Job Source", "E-Form"]
+    fields = ["Verifying Rank", "Title", "Job Source", "E-Form"]
     cnt = df["Field"].value_counts() if df is not None and len(df) else pd.Series(dtype=int)
-    ss.setdefault("other_field", "Critical")
+    if ss.get("other_field") not in fields:
+        ss.other_field = "Verifying Rank"
     fsel = st.segmented_control("Field", fields, key="other_field",
-                                format_func=lambda f: f"{f} ({int(cnt.get(f, 0))})") or "Critical"
+                                format_func=lambda f: f"{f} ({int(cnt.get(f, 0))})") or "Verifying Rank"
     sub = df[df["Field"] == fsel] if df is not None and len(df) else df
     if sub is not None and len(sub):
         summ = sub[[f"Value{sa}", f"Value{sb}"]].replace("", "(blank)").value_counts().rename("Jobs").reset_index()
@@ -479,7 +544,8 @@ elif page == "drill":
     sections = [("Sub-component count differences", "SubComponent Count"), (f"Jobs only on A", "Jobs Only A"),
                 (f"Jobs only on B", "Jobs Only B"), ("Frequency differences", "Frequency Diff"),
                 ("Performing rank differences", "PerfRank Diff"), ("Description differences", "Description Diff"),
-                ("Critical & other field differences", "Other Field Diff"), ("Maker / Model", "Maker Model Diff")]
+                ("Critical & other field differences", "Other Field Diff"),
+                ("Critical jobs per sub-component", "Critical by SubComp"), ("Maker / Model", "Maker Model Diff")]
     for title, key in sections:
         d = R[key]
         d = d[d["Machinery Location"] == mach]
