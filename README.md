@@ -1,49 +1,37 @@
-# Sister Vessel JD Comparison
+# Job Status + Job List Merger
 
-Compares two PMS **Job Status (with Job Details)** extracts from sister vessels and finds the discrepancies.
+Adds **Job Description, Maker and Model** from a PMS *Job List* export to every row of a
+PMS *Job Status* export.
 
-## Run the tool
+## Run the app
 Double-click `run_app.bat`, or:
 
 ```
-python -m streamlit run app.py --server.port 8531
+pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 
-**Step 1:** upload the two extracts (or paste their file paths). **Step 2:** click **Compare vessels**.
+Upload the Job Status file and the Job List file (CSV or Excel), review the match summary,
+and download the merged Excel/CSV.
 
-## Navigation
-The sidebar lists every page with its number of discrepancies. Start on **Summary**: each finding card has an
-**Open →** button that jumps to the detail page, and selecting a machinery in the hotspot table opens its drill-down.
+## Command line (no app)
+```
+python merge_logic.py "<Job Status file>" "<Job List file>" [output.xlsx|output.csv]
+```
 
-| Page | Shows |
+## How rows are matched
+One Job Code can be linked to several machineries, so the match uses
+**Job Code + Machinery + Component**. Before comparing, names are cleaned:
+upper/lower case and spaces ignored, `Starboard/Stbd/Port/Forward/Fwd/Aft` → `S/P/F/A`,
+the `#1` ending dropped from components, only the last part of `Parent > Child` used,
+and `High Velocity PV Valve-Cargo Tank S3` treated as matching `High Velocity PV Valve`.
+
+| Match Level | Meaning |
 |---|---|
-| Summary | A vs B totals, finding cards, discrepancy hotspots |
-| Count differences | Job counts per Function / Machinery / Sub-component |
-| Missing jobs | Jobs on only one vessel (with likely cause), job codes not used on the other vessel |
-| Frequency | Jobs with different frequency + recurring patterns (e.g. 18000 h → 36000 h) |
-| Performing rank | Rank differences (order-insensitive) |
-| Description | Similarity bands; select a row for a side-by-side highlighted comparison |
-| Critical jobs | Critical counts per vessel; % critical per machinery / sub-component / job title, flagging machinery where ≥50 % of jobs are critical (likely flagged at equipment level); job-level flag differences |
-| Other fields | Verifying Rank, Title, Job Source, E-Form differences |
-| Maker/Model & naming | Maker/Model differences; sub-component names with a duplicated machinery prefix |
-| Machinery drill-down | Every discrepancy for one machinery |
-| Export report | Choose sheets and download the Excel report |
+| 1 – Code + Machinery + Component | Most reliable |
+| 2 – Code + Machinery | One Job List entry for that code/machinery (or all entries agree) |
+| 3 – ambiguous – review | Several Job List entries with different maker/model; all values shown, separated by ` \| ` |
+| 4 – Code only | Machinery name differs; code exists on one machinery only |
+| Not Found | No matching Job Code/Machinery |
 
-**Filters** (sidebar: Function, Machinery, text search) apply to every page; active filters are shown at the top
-of the page with a **Clear filters** button. Every table has its own CSV download.
-
-## Matching logic
-- Jobs are matched on **Machinery Location + Sub Component Location + Job Code**; duplicates pair up 1:1.
-- Text is normalised (whitespace, `&amp;`) before comparing; descriptions are compared case-insensitively.
-- Sub-components written as `<Machinery> > <Sub-component>` are normalised to `<Sub-component>` before matching
-  and listed on the *Naming Issue* sheet.
-
-## Command line (no UI)
-```
-python compare_cli.py "<vesselA.xlsx>" "<vesselB.xlsx>" [output.xlsx]
-```
-
-## Files
-- `compare_engine.py` – comparison logic and Excel builder (shared by the app and CLI)
-- `app.py` – Streamlit UI
-- `compare_cli.py` – command-line report
+The **Match Note** column explains level 3, 4 and Not Found rows.
