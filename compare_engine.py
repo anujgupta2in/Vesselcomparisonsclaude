@@ -11,6 +11,9 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+# bump whenever compare() output changes, so cached results in the app are recomputed
+ENGINE_VERSION = "2.1"
+
 KEY = ["Machinery Location", "Sub Component Location", "Job Code"]
 REQUIRED = ["Vessel", "Function", "Machinery Location", "Sub Component Location", "Job Code",
             "Title", "Description", "Frequency", "Performing Rank"]
@@ -45,9 +48,12 @@ def prepare(df):
         if c not in df.columns:
             df[c] = ""
     df["Job Code"] = df["Job Code"].astype(str).str.replace(r"\.0$", "", regex=True)
+    # always treat the compared columns as text (an all-blank column, e.g. Critical, would otherwise be float);
+    # is_string_dtype also covers pandas 3's dedicated "str" dtype
+    text_cols = set(REQUIRED) | {"Maker", "Model", "Job Source", "Verifying Rank", "Critical", "E-Form", "Job Status"}
     for c in df.columns:
-        if df[c].dtype == object:
-            df[c] = df[c].map(norm)
+        if c in text_cols or pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_string_dtype(df[c]):
+            df[c] = df[c].map(norm).astype(object)
     # some extracts repeat the machinery as a prefix in the sub-component path
     # ("Auxiliary Boiler#1 > Auxiliary Boiler - General#1"); strip it so rows still match
     df["Original Sub Component"] = df["Sub Component Location"]
@@ -299,7 +305,10 @@ def compare(df_a, df_b, name_a=None, name_b=None):
     ], columns=["Area", "Check", "Count", "Sheet"])
 
     return {
+        "version": ENGINE_VERSION,
         "names": (NA, NB),
+        "critical_counts": (int(a["Critical"].str.upper().eq("C").sum()), int(b["Critical"].str.upper().eq("C").sum())),
+        "overflagged": int(crit_mach["Review note"].str.contains("% of jobs critical").sum()),
         "summary": summary,
         "findings": findings,
         "Naming Issue": naming,
@@ -355,7 +364,7 @@ def build_excel(result, sheets=None, only_mismatch_counts=True):
                 df = df[df["Status"] != "Match"]
             df = df.copy()
             for c in df.columns:
-                if df[c].dtype == object:
+                if pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_string_dtype(df[c]):
                     df[c] = df[c].astype(str).str[:32000]
             df.to_excel(xw, sheet_name=name[:31], index=False)
             ws = xw.sheets[name[:31]]
